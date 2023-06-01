@@ -25,6 +25,9 @@
 #if defined(__FreeBSD__) || defined(__NetBSD__)
 # include <sys/sysctl.h>
 #endif
+#if defined(__APPLE__) && defined(__MACH__)
+# include <mach-o/dyld.h>
+#endif
 #include <sys/types.h>
 #include <unistd.h>
 
