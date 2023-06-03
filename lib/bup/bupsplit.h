@@ -45,16 +45,12 @@
 
 typedef struct {
     unsigned s1, s2;
-    uint8_t window[BUP_WINDOWSIZE];
-    int wofs;
 } Rollsum;
 
 static inline void rollsum_init(Rollsum *r)
 {
     r->s1 = BUP_WINDOWSIZE * ROLLSUM_CHAR_OFFSET;
     r->s2 = BUP_WINDOWSIZE * (BUP_WINDOWSIZE-1) * ROLLSUM_CHAR_OFFSET;
-    r->wofs = 0;
-    memset(r->window, 0, BUP_WINDOWSIZE);
 }
 
 // These formulas are based on rollsum.h in the librsync project.
@@ -64,21 +60,41 @@ static inline void rollsum_add(Rollsum *r, uint8_t drop, uint8_t add)
     r->s2 += r->s1 - (BUP_WINDOWSIZE * (drop + ROLLSUM_CHAR_OFFSET));
 }
 
-// For some reason, gcc 4.3 (at least) optimizes badly if find_ofs()
-// is static and rollsum_roll is an inline function.  Let's use a macro
-// here instead to help out the optimizer.
-#define rollsum_roll(r, ch) do { \
-    rollsum_add((r), (r)->window[(r)->wofs], ch); \
-    (r)->window[(r)->wofs] = ch; \
-    (r)->wofs = ((r)->wofs + 1) % BUP_WINDOWSIZE; \
-} while (0)
-
 static inline uint32_t rollsum_digest(Rollsum *r)
 {
     return (r->s1 << 16) | (r->s2 & 0xffff);
 }
-    
-uint32_t rollsum_sum(uint8_t *buf, size_t ofs, size_t len);
+
+#if defined(__has_builtin)
+#if __has_builtin(__builtin_ctz)
+#define BUPSLIT_HAS_BUILTIN_CTZ 1
+#endif
+#endif
+
+static inline unsigned rollsum_extra_digest_bits(uint32_t digest, unsigned int nbits)
+{
+    digest >>= nbits;
+    /*
+     * See the DESIGN document, the bit counting loop used to
+     * be written in a way that shifted rsum *before* checking
+     * the lowest bit, make that explicit now so the code is a
+     * bit easier to understand.
+     */
+    digest >>= 1;
+#if BUPSLIT_HAS_BUILTIN_CTZ
+    // SAFETY: `~digest` will never be 0, since we shift in at least 1 zero (which becomes a one)
+    return __builtin_ctz(~digest);
+#else
+    unsigned extra_bits = 0;
+    while (digest & 1) {
+        extra_bits++;
+        digest >>= 1;
+    }
+    return extra_bits;
+#endif
+}
+
+uint32_t rollsum_sum(const uint8_t *buf, size_t ofs, size_t len);
 int bupsplit_selftest(void);
 
 #endif /* __BUPSPLIT_H */

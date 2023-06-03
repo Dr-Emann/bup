@@ -523,8 +523,9 @@ static size_t HashSplitter_find_offs(unsigned int nbits,
     // is ignored).
 
     assert(nbits <= 32);
+    size_t offset = 0;
 
-    PyThreadState *thread_state = PyEval_SaveThread();
+    Py_BEGIN_ALLOW_THREADS
 
     // Compute masks for the two 16-bit rollsum components such that
     // (s1_* | s2_*) is the mask for the entire 32-bit value.  The
@@ -535,34 +536,30 @@ static size_t HashSplitter_find_offs(unsigned int nbits,
     Rollsum r;
     rollsum_init(&r);
 
-    size_t count;
-    for (count = 0; count < len; count++) {
-        rollsum_roll(&r, buf[count]);
-
+    const unsigned char *end = buf + len;
+    const unsigned char *first_window_end = len > BUP_WINDOWSIZE ? buf + BUP_WINDOWSIZE : end;
+    const unsigned char *p;
+    for (p = buf; p < first_window_end; p++) {
+        rollsum_add(&r, 0, *p);
         if ((r.s2 & s2_mask) == s2_mask && (r.s1 & s1_mask) == s1_mask) {
-            uint32_t rsum = rollsum_digest(&r);
-
-            rsum >>= nbits;
-            /*
-             * See the DESIGN document, the bit counting loop used to
-             * be written in a way that shifted rsum *before* checking
-             * the lowest bit, make that explicit now so the code is a
-             * bit easier to understand.
-             */
-            rsum >>= 1;
-            *extrabits = 0;
-            while (rsum & 1) {
-                (*extrabits)++;
-                rsum >>= 1;
-            }
-
-            PyEval_RestoreThread(thread_state);
-            assert(count < len);
-            return count + 1;
+            goto found;
         }
     }
-    PyEval_RestoreThread(thread_state);
-    return 0;
+    for (; p < end; p++) {
+        // Safety: If this loop is entered, `first_window_end != end`, which can only occur if `end - start > BUP_WINDOWSIZE`,
+        //         in which case, `first_window_end = start + BUP_WINDOWSIZE`, so accessing `p[-BUP_WINDOWSIZE]` is safe.
+        rollsum_add(&r, p[-BUP_WINDOWSIZE], *p);
+        if ((r.s2 & s2_mask) == s2_mask && (r.s1 & s1_mask) == s1_mask) {
+            goto found;
+        }
+    }
+    goto end;
+found:
+    *extrabits = rollsum_extra_digest_bits(rollsum_digest(&r), nbits);
+    offset = (p - buf) + 1;
+end:
+    Py_END_ALLOW_THREADS
+    return offset;
 }
 
 static PyObject *HashSplitter_iternext(HashSplitter *self)

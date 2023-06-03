@@ -34,13 +34,25 @@
 #include <stdlib.h>
 #include <stdio.h>
 
-uint32_t rollsum_sum(uint8_t *buf, size_t ofs, size_t len)
+
+uint32_t rollsum_sum(const uint8_t *buf, size_t ofs, size_t len)
 {
-    size_t count;
+    const uint8_t *p;
     Rollsum r;
     rollsum_init(&r);
-    for (count = ofs; count < len; count++)
-	rollsum_roll(&r, buf[count]);
+    const uint8_t *start = buf + ofs;
+    const uint8_t *end = buf + len;
+    const uint8_t *first_window_end = end - start > BUP_WINDOWSIZE ? start + BUP_WINDOWSIZE : end;
+
+    for (p = start; p < first_window_end; p++) {
+        rollsum_add(&r, 0, *p);
+    }
+    for (; p < end; p++) {
+        // Safety: If this loop is entered, `first_window_end != end`, which can only occur if `end - start > BUP_WINDOWSIZE`,
+        //         in which case, `first_window_end = start + BUP_WINDOWSIZE`, so accessing `p[-BUP_WINDOWSIZE]` is safe.
+        rollsum_add(&r, p[-BUP_WINDOWSIZE], *p);
+    }
+
     return rollsum_digest(&r);
 }
 
